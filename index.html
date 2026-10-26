@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>뇌 당구</title>
+<style>
+:root{--bg:#12141a;--ink:#e9e6ee;--dim:#8d8a99;--rim:#4a2a3a;--felt:#1f6b57}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pretendard","Noto Sans KR",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;padding:10px;touch-action:none;user-select:none}
+h1{font-size:20px;margin:4px 0 8px;font-weight:700}
+.bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;margin-bottom:8px}
+button{background:#232634;color:var(--ink);border:1px solid #3a3e52;border-radius:8px;padding:7px 14px;font:inherit;cursor:pointer}
+button.on{background:var(--felt);border-color:#3fa88a}
+button:focus-visible{outline:2px solid #9fe3cf;outline-offset:2px}
+.score{display:flex;gap:18px;font-size:17px;margin-bottom:6px}
+.score b{font-variant-numeric:tabular-nums}
+.score .turn{color:#9fe3cf}
+canvas{width:100%;max-width:900px;height:auto;border-radius:12px;background:#0c0d12;cursor:crosshair}
+#msg{min-height:24px;margin-top:8px;color:var(--dim);text-align:center}
+</style>
+</head>
+<body>
+<h1>뇌 당구</h1>
+<div class="bar">
+  <button id="t1" class="on">옆모습 뇌</button>
+  <button id="t2">정면 뇌</button>
+</div>
+<div class="bar">
+  <button id="m4" class="on">4구</button>
+  <button id="m3">3구 (3쿠션)</button>
+  <button id="rs">다시 시작</button>
+</div>
+<div class="score"><span id="s0"></span><span id="s1"></span></div>
+<canvas id="c" width="900" height="640"></canvas>
+<div id="msg"></div>
+<script>
+const W=900,H=640,R=11,cv=document.getElementById('c'),g=cv.getContext('2d');
+const msg=document.getElementById('msg');
+// ---- 뇌 모양 테이블 ----
+function buildFront(){const poly=[];
+  const WX=125,HT=170,S=3.3,P={dT:62,dB:31,w:5,g:[22,10,24,12],gw:3,fr:[.2,.4,.6,.8]};
+  const CTRL=[[0.109,0.005],[0.217,0.02],[0.339,0.05],[0.474,0.1],[0.605,0.17],[0.715,0.25],[0.8,0.333],[0.876,0.42],[0.927,0.5],[0.968,0.58],[1.0,0.667],[1.018,0.74],[1.0,0.84],[0.93,0.92],[0.8,0.975],[0.6,1.0]];
+  function cr(Pt,steps){
+    const Q=[Pt[0]].concat(Pt,[Pt[Pt.length-1]]),o=[];
+    for(let i=1;i<Q.length-2;i++){
+      const a=Q[i-1],b=Q[i],c=Q[i+1],d=Q[i+2];
+      for(let k=0;k<steps;k++){
+        const t=k/steps,t2=t*t,t3=t2*t;
+        o.push([0,1].map(j=>0.5*(2*b[j]+(-a[j]+c[j])*t+(2*a[j]-5*b[j]+4*c[j]-d[j])*t2+(-a[j]+3*b[j]-3*c[j]+d[j])*t3)));
+      }
+    }
+    o.push(Pt[Pt.length-1]);return o;
+  }
+  function resample(pl,st){
+    const o=[pl[0]];let left=st;
+    for(let i=1;i<pl.length;i++){
+      const a=pl[i-1],b=pl[i],seg=Math.hypot(b[0]-a[0],b[1]-a[1]);let pos=0;
+      while(seg-pos>=left){pos+=left;const t=pos/seg;o.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);left=st}
+      left-=(seg-pos);
+    }
+    o.push(pl[pl.length-1]);return o;
+  }
+  const pr=a=>{a=Math.abs(a);return a>=1?0:a<=0.75?1:0.5*(1+Math.cos(Math.PI*(a-0.75)/0.25))};
+  const w=P.w,main0=[[w,0]].concat(CTRL.map(q=>[q[0]*WX,q[1]*HT]),[[w,HT]]);
+  const m=resample(cr(main0,14),1),n=m.length,L=m.map(q=>q.slice());
+  for(let i=0;i<n;i++){
+    const a=m[Math.max(0,i-2)],b=m[Math.min(n-1,i+2)];
+    let tx=b[0]-a[0],ty=b[1]-a[1];const l=Math.hypot(tx,ty)||1;tx/=l;ty/=l;
+    let sh=0;
+    P.fr.forEach((f,j)=>{sh+=P.g[j]*pr((i-f*(n-1))/P.gw)});
+    L[i][0]+=-ty*sh;L[i][1]+=tx*sh;
+  }
+  const top=[],bot=[],K=10;
+  for(let k=0;k<=K;k++){const x=w*k/K;top.push([x,P.dT-w+Math.sqrt(Math.max(0,w*w-x*x))])}
+  top.push([w,P.dT-w],[w,0]);
+  for(let k=K;k>=0;k--){const x=w*k/K;bot.push([x,HT-P.dB+w-Math.sqrt(Math.max(0,w*w-x*x))])}
+  const right=top.concat(L,[[w,HT],[w,HT-P.dB+w]],bot);
+  const left=right.slice().reverse().map(q=>[-q[0],q[1]]);
+  right.concat(left).forEach(q=>{
+    const p={x:450+q[0]*S,y:40+q[1]*S},l=poly[poly.length-1];
+    if(!l||Math.hypot(p.x-l.x,p.y-l.y)>1e-6)poly.push(p);
+  });
+  const f=poly[0],e=poly[poly.length-1];
+  if(Math.hypot(f.x-e.x,f.y-e.y)<1e-6)poly.pop();
+return poly;}
+function buildSide(){const poly=[];
+  const S=3.3,OX=450,OY=58,cx=3,cy=4,tb=5;
+  const P=[[-10,0],[40,4],[82,18],[112,42],[124,74],[118,98],[114+cx,114+cy*.5],[104+cx,134+cy],[84+cx,150+cy],[60+cx*.6,152+cy],[44,140],[38,129],[30,131+tb],[0,143+tb],[-30,139+tb],[-52,124+tb],[-58,111+tb*.4],[-64,103],[-84,96],[-100,92],[-116,82],[-124,60],[-116,34],[-92,14],[-56,3]];
+  function cr(P,steps){
+    const n=P.length,o=[];
+    for(let i=0;i<n;i++){
+      const a=P[(i+n-1)%n],b=P[i],c=P[(i+1)%n],d=P[(i+2)%n];
+      for(let k=0;k<steps;k++){
+        const t=k/steps,t2=t*t,t3=t2*t;
+        o.push([0,1].map(j=>0.5*(2*b[j]+(-a[j]+c[j])*t+(2*a[j]-5*b[j]+4*c[j]-d[j])*t2+(-a[j]+3*b[j]-3*c[j]+d[j])*t3)));
+      }
+    }
+    return o;
+  }
+  function resample(pl,st){
+    const q=pl.concat([pl[0]]),o=[q[0]];let left=st;
+    for(let i=1;i<q.length;i++){
+      const a=q[i-1],b=q[i],seg=Math.hypot(b[0]-a[0],b[1]-a[1]);let pos=0;
+      while(seg-pos>=left){pos+=left;const t=pos/seg;o.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);left=st}
+      left-=(seg-pos);
+    }
+    return o;
+  }
+  const pr=a=>{a=Math.abs(a);return a>=1?0:a<=0.75?1:0.5*(1+Math.cos(Math.PI*(a-0.75)/0.25))};
+  const m=resample(cr(P,16),1),n=m.length,L=m.map(q=>q.slice());
+  const near=(x,y)=>{let bi=0,bd=1e9;for(let i=0;i<n;i++){const d=Math.hypot(m[i][0]-x,m[i][1]-y);if(d<bd){bd=d;bi=i}}return bi};
+  const iSyl=near(-64,103+tb*.4),iTen=near(117,104+cy*.4),iStem=near(41,134);
+  const gs=[[iSyl,46,3.5],[iTen,36,2.6],[iStem,24,3]];
+  const lenC=(iTen-iSyl+n)%n,gC=[14,20,16,22,16,20];
+  for(let k=1;k<=6;k++)gs.push([(iSyl+Math.round(lenC*k/7))%n,gC[k-1],2.5]);
+  const lenB=(iStem-iTen+n)%n;
+  [1/3,2/3].forEach(f=>gs.push([(iTen+Math.round(lenB*f))%n,10,2.2]));
+  [[-12,142+tb],[-44,123+tb]].forEach(t=>gs.push([near(t[0],t[1]),10,2.4]));
+  const dirs=gs.map(g=>{const a=m[(g[0]-2+n)%n],b=m[(g[0]+2)%n];let tx=b[0]-a[0],ty=b[1]-a[1];const l=Math.hypot(tx,ty)||1;return[-ty/l,tx/l]});
+  dirs[0]=[Math.cos(10*Math.PI/180),-Math.sin(10*Math.PI/180)];
+  for(let i=0;i<n;i++){
+    gs.forEach((g,j)=>{let d=Math.abs(i-g[0]);d=Math.min(d,n-d);const w=g[1]*pr(d/g[2]);L[i][0]+=dirs[j][0]*w;L[i][1]+=dirs[j][1]*w});
+  }
+  L.forEach(q=>{
+    const p={x:OX+q[0]*S,y:OY+q[1]*S},l=poly[poly.length-1];
+    if(!l||Math.hypot(p.x-l.x,p.y-l.y)>1e-6)poly.push(p);
+  });
+  const f=poly[0],e=poly[poly.length-1];
+  if(Math.hypot(f.x-e.x,f.y-e.y)<1e-6)poly.pop();
+return poly;}
+let poly=[],N=0,tableKey='side';
+const BUILD={side:buildSide,front:buildFront};
+function setTable(k){tableKey=k;poly=BUILD[k]();N=poly.length}
+setTable('side');
+function tablePath(){g.beginPath();poly.forEach((p,i)=>i?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y));g.closePath()}
+// 쿠션(벽) 충돌: e = 반발계수
+function wall(b,e){
+  let hit=false;
+  for(let i=0;i<N;i++){
+    const A=poly[i],B=poly[(i+1)%N],ex=B.x-A.x,ey=B.y-A.y;
+    if(b.x<Math.min(A.x,B.x)-R||b.x>Math.max(A.x,B.x)+R||b.y<Math.min(A.y,B.y)-R||b.y>Math.max(A.y,B.y)+R)continue;
+    if(ex*ex+ey*ey<1e-9)continue;
+    let u=((b.x-A.x)*ex+(b.y-A.y)*ey)/(ex*ex+ey*ey);u=u<0?0:u>1?1:u;
+    const dx=b.x-(A.x+ex*u),dy=b.y-(A.y+ey*u),d=Math.hypot(dx,dy);
+    if(d<R&&d>1e-6){
+      const nx=dx/d,ny=dy/d,vn=b.vx*nx+b.vy*ny;
+      if(vn<0){b.vx-=(1+e)*vn*nx;b.vy-=(1+e)*vn*ny;hit=true}
+      b.x+=nx*(R-d);b.y+=ny*(R-d);
+    }
+  }
+  return hit;
+}
+// ---- 게임 상태 ----
+let mode=4,balls=[],turn=0,score=[0,0],state='aim',T=0,shooter=null,cush=0,hitSet=new Set(),doneCush=-1;
+let ptr=null,down=false;
+const goal=()=>mode===4?10:5;
+function setup(){
+  score=[0,0];turn=0;state='aim';
+  const SP={side:{w:[219,240],y:[665,240],r3:[434,340],r4:[[434,355],[434,190]]},front:{w:[260,350],y:[640,350],r3:[450,390],r4:[[450,440],[450,300]]}}[tableKey];
+  balls=[
+    {x:SP.w[0],y:SP.w[1],c:'#f6f4ef',n:'흰공'},
+    {x:SP.y[0],y:SP.y[1],c:'#f2d33a',n:'노란공'}
+  ];
+  if(mode===4)SP.r4.forEach(q=>balls.push({x:q[0],y:q[1],c:'#d63a3a',red:1,n:'빨간공'}));
+  else balls.push({x:SP.r3[0],y:SP.r3[1],c:'#d63a3a',red:1,n:'빨간공'});
+  balls.forEach(b=>{b.vx=b.vy=0;b.lw=-9});
+  updUI();
+  msg.textContent=mode===4?'4구: 내 공으로 빨간 공 두 개를 모두 맞히면 1점. 공에서 뒤로 끌어당겼다 놓으세요.':'3구: 내 공이 쿠션을 3번 이상 거친 뒤 나머지 두 공을 모두 맞히면 1점. 공에서 뒤로 끌어당겼다 놓으세요.';
+}
+function updUI(){
+  for(let i=0;i<2;i++){
+    const e=document.getElementById('s'+i);
+    e.innerHTML=(i===0?'⚪ 플레이어1 ':'🟡 플레이어2 ')+'<b>'+score[i]+'</b> / '+goal();
+    e.className=(i===turn&&state!=='over')?'turn':'';
+  }
+  document.getElementById('m4').className=mode===4?'on':'';
+  document.getElementById('m3').className=mode===3?'on':'';
+  document.getElementById('t1').className=tableKey==='side'?'on':'';
+  document.getElementById('t2').className=tableKey==='front'?'on':'';
+}
+const cur=()=>balls[turn];
+const targets=s=>balls.filter(b=>b!==s&&(mode===3||b.red));
+// ---- 조준 가이드 ----
+function guide(){
+  const s=cur();let dx=s.x-ptr.x,dy=s.y-ptr.y;const L=Math.hypot(dx,dy);
+  if(L<10)return null;
+  dx/=L;dy/=L;
+  const v={x:s.x,y:s.y,vx:dx*2,vy:dy*2},pts=[{x:s.x,y:s.y}],bounce=[];
+  let ghost=null,tgt=null;
+  for(let k=0;k<800&&!ghost;k++){
+    v.x+=v.vx;v.y+=v.vy;
+    if(wall(v,1)){pts.push({x:v.x,y:v.y});bounce.push({x:v.x,y:v.y})}
+    for(const o of balls){
+      if(o===s)continue;
+      if(Math.hypot(o.x-v.x,o.y-v.y)<2*R){ghost={x:v.x,y:v.y};tgt=o;break}
+    }
+  }
+  pts.push({x:v.x,y:v.y});
+  return{pts,bounce,ghost,tgt,dx,dy,L};
+}
+// ---- 물리 ----
+function physics(dt){
+  T+=dt;
+  for(const b of balls){
+    b.x+=b.vx*dt;b.y+=b.vy*dt;
+    const f=Math.exp(-0.9*dt);b.vx*=f;b.vy*=f;
+    if(Math.hypot(b.vx,b.vy)<10)b.vx=b.vy=0;
+    if(wall(b,0.9)&&b===shooter&&T-b.lw>0.06){cush++;b.lw=T}
+  }
+  for(let i=0;i<balls.length;i++)for(let j=i+1;j<balls.length;j++){
+    const a=balls[i],b=balls[j];let dx=a.x-b.x,dy=a.y-b.y;const d=Math.hypot(dx,dy);
+    if(d<2*R&&d>1e-6){
+      const nx=dx/d,ny=dy/d,push=(2*R-d)/2;
+      a.x+=nx*push;a.y+=ny*push;b.x-=nx*push;b.y-=ny*push;
+      const vr=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny;
+      if(vr<0){const k=(1+0.95)/2*vr;a.vx-=k*nx;a.vy-=k*ny;b.vx+=k*nx;b.vy+=k*ny}
+      if(a===shooter||b===shooter){
+        const o=a===shooter?b:a;
+        if(targets(shooter).includes(o)&&!hitSet.has(o)){
+          hitSet.add(o);
+          if(hitSet.size===targets(shooter).length)doneCush=cush;
+        }
+      }
+    }
+  }
+}
+function endShot(){
+  const need=mode===3?3:0;
+  const ok=doneCush>=0&&doneCush>=need;
+  if(ok){
+    score[turn]++;
+    if(score[turn]>=goal()){
+      state='over';updUI();
+      msg.textContent='🏆 플레이어'+(turn+1)+' 승리! "다시 시작"을 눌러 한 판 더.';return;
+    }
+    msg.textContent='득점! 플레이어'+(turn+1)+' 한 번 더.';
+  }else{
+    let why='';
+    if(mode===3&&hitSet.size===targets(shooter).length)why=' (쿠션 '+doneCush+'번 — 3번 필요)';
+    turn=1-turn;
+    msg.textContent='무득점'+why+'. 플레이어'+(turn+1)+' 차례.';
+  }
+  state='aim';updUI();
+}
+// ---- 입력 ----
+function pos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+cv.addEventListener('pointerdown',e=>{if(state!=='aim')return;down=true;ptr=pos(e);cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointermove',e=>{if(down)ptr=pos(e)});
+cv.addEventListener('pointerup',()=>{
+  if(!down)return;down=false;
+  const s=cur(),dx=s.x-ptr.x,dy=s.y-ptr.y,L=Math.hypot(dx,dy);
+  if(L<18){ptr=null;return}
+  const p=Math.min(L,220)/220;
+  s.vx=dx/L*p*1500;s.vy=dy/L*p*1500;
+  shooter=s;cush=0;hitSet=new Set();doneCush=-1;state='move';ptr=null;
+});
+document.getElementById('m4').onclick=()=>{mode=4;setup()};
+document.getElementById('m3').onclick=()=>{mode=3;setup()};
+document.getElementById('rs').onclick=setup;
+document.getElementById('t1').onclick=()=>{setTable('side');setup()};
+document.getElementById('t2').onclick=()=>{setTable('front');setup()};
+// ---- 그리기 ----
+function drawTable(){
+  g.clearRect(0,0,W,H);
+  tablePath();g.lineJoin='round';g.lineWidth=36;g.strokeStyle='#4a2a3a';g.stroke();
+  const gr=g.createRadialGradient(450,320,40,450,320,420);
+  gr.addColorStop(0,'#2a8068');gr.addColorStop(1,'#1a5a49');
+  g.fillStyle=gr;g.fill();
+  g.save();tablePath();g.clip();g.lineWidth=30;g.strokeStyle='rgba(255,255,255,.06)';g.stroke();g.restore();
+  tablePath();g.lineWidth=3;g.strokeStyle='#0d3a2e';g.stroke();
+}
+function drawBall(b,i){
+  const gr=g.createRadialGradient(b.x-4,b.y-4,2,b.x,b.y,R);
+  gr.addColorStop(0,'#fff');gr.addColorStop(.35,b.c);gr.addColorStop(1,'rgba(0,0,0,.55)');
+  g.beginPath();g.arc(b.x+2,b.y+3,R,0,7);g.fillStyle='rgba(0,0,0,.3)';g.fill();
+  g.beginPath();g.arc(b.x,b.y,R,0,7);g.fillStyle=b.c;g.fill();
+  g.fillStyle=gr;g.fill();
+  if(i===turn&&state==='aim'){g.beginPath();g.arc(b.x,b.y,R+5,0,7);g.strokeStyle='#9fe3cf';g.lineWidth=2;g.stroke()}
+}
+function drawGuide(){
+  const gd=guide();if(!gd)return;
+  const s=cur();
+  g.setLineDash([8,7]);g.lineWidth=2;g.strokeStyle='rgba(255,255,255,.8)';
+  g.beginPath();gd.pts.forEach((p,i)=>i?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y));g.stroke();
+  g.setLineDash([]);
+  gd.bounce.forEach((p,i)=>{
+    g.beginPath();g.arc(p.x,p.y,8,0,7);g.fillStyle='#f2d33a';g.fill();
+    g.fillStyle='#222';g.font='bold 11px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText(i+1,p.x,p.y+.5);
+  });
+  if(gd.ghost){
+    const{ghost:q,tgt:o}=gd;
+    g.beginPath();g.arc(q.x,q.y,R,0,7);g.strokeStyle='#fff';g.lineWidth=2;g.stroke();
+    let nx=o.x-q.x,ny=o.y-q.y;const nl=Math.hypot(nx,ny);nx/=nl;ny/=nl;
+    g.lineWidth=3;g.strokeStyle='#ff9a6b';g.beginPath();g.moveTo(o.x,o.y);g.lineTo(o.x+nx*70,o.y+ny*70);g.stroke();
+    const dn=gd.dx*nx+gd.dy*ny;let tx=gd.dx-dn*nx,ty=gd.dy-dn*ny;const tl=Math.hypot(tx,ty);
+    if(tl>.05){tx/=tl;ty/=tl;g.strokeStyle='#7fd6ff';g.beginPath();g.moveTo(q.x,q.y);g.lineTo(q.x+tx*50,q.y+ty*50);g.stroke()}
+  }
+  // 큐대
+  const bx=s.x-gd.dx*(R+5),by=s.y-gd.dy*(R+5);
+  g.lineWidth=5;g.lineCap='round';g.strokeStyle='#d9b27c';g.beginPath();g.moveTo(bx,by);g.lineTo(ptr.x,ptr.y);g.stroke();
+  msg.textContent='파워 '+Math.round(Math.min(gd.L,220)/220*100)+'%'+(mode===3?' · 노란 번호 = 쿠션 횟수':'');
+}
+let last=performance.now();
+function loop(now){
+  const dt=Math.min((now-last)/1000,1/30);last=now;
+  if(state==='move'){
+    for(let i=0;i<4;i++)physics(dt/4);
+    if(balls.every(b=>b.vx===0&&b.vy===0))endShot();
+  }
+  drawTable();
+  balls.forEach(drawBall);
+  if(state==='aim'&&down&&ptr)drawGuide();
+  requestAnimationFrame(loop);
+}
+setup();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
